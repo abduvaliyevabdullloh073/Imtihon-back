@@ -21,6 +21,7 @@ const server = http.createServer(app);
 
 const io = socketIo(server, {
   cors: {
+    origin: 'http://bobur-social-app.netlify.app',
     origin: 'http://localhost:3000',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     credentials: true,
@@ -40,6 +41,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // CORS
 app.use(cors({
   origin: 'http://localhost:3000',
+  origin: 'http://bobur-social-app.netlify.app',
   credentials: true,
 }));
 
