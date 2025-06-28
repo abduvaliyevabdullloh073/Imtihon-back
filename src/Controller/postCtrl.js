@@ -190,32 +190,36 @@ const postCtrl = {
   likePost: async (req, res) => {
     try {
       const postId = req.params.id;
-      console.log('Attempting to like post with ID:', postId);
-  
       const post = await Post.findById(postId);
       if (!post) {
-        console.log('Post not found for ID:', postId);
         return res.status(404).json({ message: 'Post topilmadi' });
       }
   
       const userId = req.user?._id;
       if (!userId) {
-        console.log('User ID not found in request:', req.user);
         return res.status(401).json({ message: 'Foydalanuvchi autentifikatsiyasi topilmadi' });
       }
-      console.log('User ID:', userId);
   
       const isLiked = post.likes.includes(userId.toString());
-      console.log('Is post liked by user?', isLiked);
   
       if (isLiked) {
-        console.log('Removing like from post:', postId);
         post.likes = post.likes.filter((id) => id.toString() !== userId.toString());
+  
+        // (optional) Notificationni o‘chirish ham mumkin
+        await Notification.deleteOne({
+          senderId: userId,
+          receiverId: post.userId,
+          type: 'like',
+          postId: post._id,
+        });
       } else {
-        console.log('Adding like to post:', postId);
         post.likes.push(userId);
   
         if (post.userId.toString() !== userId.toString()) {
+          // --- ASOSIY O‘ZGARISH: USERNAME-ni DBdan olish ---
+          const sender = await require('../Model/UserModel').findById(userId);
+          const senderUsername = sender?.username || sender?.name || "User";
+  
           const existingNotification = await Notification.findOne({
             senderId: userId,
             receiverId: post.userId,
@@ -223,12 +227,11 @@ const postCtrl = {
             postId: post._id,
           });
           if (!existingNotification) {
-            console.log('Creating new notification for like');
             const newNotification = await Notification.create({
               senderId: userId,
               receiverId: post.userId,
               type: 'like',
-              message: `${req.user.username} sizning postingizga like bosdi: "${post.content.substring(0, 20)}..."`,
+              message: `${senderUsername} sizning postingizga like bosdi: "${post.content.substring(0, 20)}..."`,
               postId: post._id,
             });
   
@@ -238,20 +241,13 @@ const postCtrl = {
   
             const receiverSocketId = global.onlineUsers.get(post.userId.toString());
             if (receiverSocketId) {
-              console.log('Emitting new notification to:', receiverSocketId);
-              global._io.to(receiverSocketId).emit('newNotification', {
-                ...populatedNotification._doc,
-                createdAt: new Date(),
-              });
+              global._io.to(receiverSocketId).emit('newNotification', populatedNotification);
             }
-          } else {
-            console.log('Existing notification found, skipping creation');
           }
         }
       }
   
       await post.save();
-      console.log('Post saved successfully with likes:', post.likes);
   
       const populatedPost = await Post.findById(postId)
         .populate('userId', 'username profileImage')
@@ -262,7 +258,6 @@ const postCtrl = {
   
       res.status(200).json({ post: populatedPost });
     } catch (err) {
-      console.error('likePost error:', err.message, err.stack);
       res.status(500).json({ message: 'Server xatosi: Like qo‘yishda muammo', error: err.message });
     }
   },
@@ -274,6 +269,14 @@ const postCtrl = {
   
       post.likes = post.likes.filter(id => id.toString() !== req.user._id.toString());
       await post.save();
+  
+      await Notification.deleteOne({
+        senderId: req.user._id,
+        receiverId: post.userId,
+        type: 'like',
+        postId: post._id,
+      });
+  
       res.status(200).json(post);
     } catch (err) {
       res.status(500).json({ msg: err.message });

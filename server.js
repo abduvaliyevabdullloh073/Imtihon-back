@@ -6,11 +6,11 @@ const socketIo = require('socket.io');
 const path = require('path');
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
-const Notification = require('./src/Model/notificatoinModel');
-
 dotenv.config();
 
+// Routerlar
 const authRouter = require('./src/Router/authRouter');
+const adminRouter = require('./src/Router/adminRouter');
 const postRouter = require('./src/Router/postRouter');
 const userRouter = require('./src/Router/userRouter');
 const commentRouter = require('./src/Router/commentRouter');
@@ -27,72 +27,48 @@ const io = socketIo(server, {
   },
 });
 
+// Socket global
 global._io = io;
 const onlineUsers = new Map();
 global.onlineUsers = onlineUsers;
 
-app.use(express.json());
-app.use(cors({ origin: 'http://localhost:3000', credentials: true }));
+// Fayl upload va JSON parser
 app.use(expressFileUpload({ useTempFiles: true, tempFileDir: '/tmp/' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// CORS
+app.use(cors({
+  origin: 'http://localhost:3000',
+  credentials: true,
+}));
+
+// Statik fayl (agar kerak bo‘lsa)
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ROUTERLAR
 app.use('/api', authRouter);
-app.use('/api/post', postRouter);
 app.use('/api/user', userRouter);
+app.use('/api/admin', adminRouter);
+app.use('/api/post', postRouter);
 app.use('/api/comment', commentRouter);
-app.use('/api/notification', notificationRouter);
+app.use('/api/notifications', notificationRouter);
 
+// SOCKET IO
 io.on('connection', (socket) => {
-
   socket.on('join', (userId) => {
     if (userId) {
       socket.join(userId.toString());
       onlineUsers.set(userId.toString(), socket.id);
     }
   });
-
-  socket.on('newNotification', async (notificationData) => {
-    try {
-      const { receiverId, senderId, type, message, postId, post } = notificationData;
-
-      const newNotification = await Notification.create({
-        receiverId,
-        senderId,
-        type,
-        message,
-        postId: postId || null,
-      });
-
-      const populatedNotification = await Notification.findById(newNotification._id)
-        .populate('senderId', 'username profileImage')
-        .populate('postId', 'content postImage');
-
-      const socketId = onlineUsers.get(receiverId.toString());
-      if (socketId) {
-        io.to(receiverId.toString()).emit('newNotification', {
-          ...populatedNotification._doc,
-          post: post || populatedNotification.postId,
-        });
-      }
-    } catch (err) {
-      console.error('Notification yuborishda xato:', err.message);
-    }
-  });
-
-  socket.on('newComment', (comment) => {
-    io.emit('newComment', comment);
-  });
-
   socket.on('notificationRead', (data) => {
     const { notificationId, userId } = data;
-    console.log('Notification read event received:', data);
     io.to(userId.toString()).emit('notificationUpdated', {
       notificationId,
       isRead: true,
     });
   });
-
   socket.on('disconnect', () => {
     for (let [userId, socketId] of onlineUsers.entries()) {
       if (socketId === socket.id) {
@@ -103,6 +79,7 @@ io.on('connection', (socket) => {
   });
 });
 
+// MONGO
 const MONGO_URL = process.env.MONGO_URL;
 const PORT = process.env.PORT || 4000;
 
@@ -118,6 +95,7 @@ mongoose
     process.exit(1);
   });
 
+// UNIVERSAL ERROR HANDLER (eng oxirida)
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ message: 'Serverda xato yuz berdi' });

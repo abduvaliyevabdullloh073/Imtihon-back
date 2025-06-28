@@ -1,14 +1,19 @@
 const express = require('express');
 const router = express.Router();
 const userCtrl = require('../Controller/userCtrl');
-const authMiddleware = require('../middleware/authMiddleware');
+const auth = require('../middleware/authMiddleware');
 
-router.get('/me', authMiddleware, userCtrl.getCurrentUser);
-router.get('/', authMiddleware, userCtrl.searchOrGetUsers);
-router.get('/:id', authMiddleware, userCtrl.getOneUser);
-router.put('/:id', authMiddleware, userCtrl.updateUser);
-router.delete('/:id', authMiddleware, userCtrl.deleteUser);
-router.put('/follow/:id', authMiddleware, userCtrl.followUser);
-router.put('/unfollow/:id', authMiddleware, userCtrl.unfollowUser);
+router.get('/me', auth, userCtrl.getCurrentUser);
+
+router.get('/:id/liked-posts', auth, userCtrl.getLikedPosts);
+router.get('/:id/commented-posts', auth, userCtrl.getCommentedPosts);
+router.get('/:id/my-posts', auth, userCtrl.getMyPosts);
+
+router.get('/:id', auth, userCtrl.getOneUser);
+router.get('/', auth, userCtrl.searchOrGetUsers);
+router.put('/:id', auth, userCtrl.updateUser);
+router.delete('/:id', auth, userCtrl.deleteUser);
+router.put('/follow/:id', auth, userCtrl.followUser);
+router.put('/unfollow/:id', auth, userCtrl.unfollowUser);
 
 module.exports = router;

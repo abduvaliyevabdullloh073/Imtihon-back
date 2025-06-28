@@ -11,4 +11,4 @@ router.get('/my-posts/:userId', authMiddleware, postCtrl.myPosts);
 router.put('/like/:id', authMiddleware, postCtrl.likePost);
 router.put('/unlike/:id', authMiddleware, postCtrl.unlikePost); 
 
-module.exports = router;
+module.exports = router; 

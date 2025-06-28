@@ -1,6 +1,7 @@
 const Post = require('../Model/postModel');
 const Comment = require('../Model/commentsModel');
 const Notification = require('../Model/notificatoinModel');
+const User = require('../Model/UserModel');
 
 const commentCtrl = {
   createComment: async (req, res) => {
@@ -25,55 +26,61 @@ const commentCtrl = {
         $push: { comments: newComment._id },
       });
 
-      const populatedComment = await Comment.findById(newComment._id).populate(
-        'userId',
-        'username profileImage'
-      );
+      const populatedComment = await Comment.findById(newComment._id)
+        .populate('userId', 'username profileImage');
 
-      // Notification yaratish
+      // NOTIFICATION: faqat bitta va username DBdan olib yuboriladi!
       if (req.user._id.toString() !== post.userId.toString()) {
-        await Notification.create({
+        const sender = await User.findById(req.user._id);
+        const senderUsername = sender?.username || sender?.name || 'User';
+
+        // Comment notification: 1 comment = 1 notification
+        const existing = await Notification.findOne({
           senderId: req.user._id,
           receiverId: post.userId,
           type: 'comment',
-          message: `${req.user.username} sizning postingizga komment yozdi: "${post.content.substring(0, 20)}..."`,
-          postId: postId,
+          postId,
           commentId: newComment._id,
         });
-
-        const receiverSocketId = global.onlineUsers.get(post.userId.toString());
-        if (receiverSocketId) {
-          global._io.to(receiverSocketId).emit('newNotification', {
+        if (!existing) {
+          const newNotification = await Notification.create({
             senderId: req.user._id,
             receiverId: post.userId,
             type: 'comment',
-            message: `${req.user.username} sizning postingizga komment yozdi: "${post.content.substring(0, 20)}..."`,
+            message: `${senderUsername} sizning postingizga komment yozdi: "${text.substring(0, 20)}..."`,
             postId: postId,
             commentId: newComment._id,
-            createdAt: new Date(),
+            isRead: false,
           });
+
+          const populatedNotification = await Notification.findById(newNotification._id)
+            .populate('senderId', 'username profileImage')
+            .populate('postId', 'content postImage')
+            .populate('commentId', 'text');
+
+          const receiverSocketId = global.onlineUsers.get(post.userId.toString());
+          if (receiverSocketId) {
+            global._io.to(receiverSocketId).emit('newNotification', populatedNotification);
+          }
         }
       }
 
-      // Kommentni faqat bir marta yuborish
+      // Commentni frontga jo‘natish
       global._io.emit('newComment', populatedComment);
 
       res.status(201).json(populatedComment);
     } catch (err) {
-      console.error('createComment error:', err.message, err.stack);
       res.status(500).json({ message: 'Server xatosi: Komment yaratishda muammo' });
     }
   },
 
   getCommentsByPost: async (req, res) => {
     try {
-      console.log('Fetching comments for post:', req.params.postId);
       const comments = await Comment.find({ postId: req.params.postId })
         .populate('userId', 'username profileImage')
         .sort({ createdAt: -1 });
       res.json(comments);
     } catch (err) {
-      console.error('getCommentsByPost error:', err.message, err.stack);
       res.status(500).json({ message: 'Server xatosi: Kommentlarni olishda muammo' });
     }
   },
@@ -104,7 +111,6 @@ const commentCtrl = {
       );
       res.json(populatedComment);
     } catch (err) {
-      console.error('updateComment error:', err.message, err.stack);
       res.status(500).json({ message: 'Server xatosi: Komment yangilashda muammo' });
     }
   },
@@ -128,7 +134,6 @@ const commentCtrl = {
 
       res.json({ message: 'Komment o‘chirildi' });
     } catch (err) {
-      console.error('deleteComment error:', err.message, err.stack);
       res.status(500).json({ message: 'Server xatosi: Komment o‘chirishda muammo' });
     }
   },

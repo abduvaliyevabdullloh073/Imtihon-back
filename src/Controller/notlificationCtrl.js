@@ -1,15 +1,15 @@
 const Notification = require('../Model/notificatoinModel');
-const User = require('../Model/userModel');
+const User = require('../Model/UserModel');
+const Post = require('../Model/postModel');
 
 const notificationCtrl = {
   createNotification: async (req, res) => {
     try {
       const { type, senderId, receiverId, postId, commentId, message } = req.body;
 
-      if (!type || !senderId || !receiverId || !message) {
-        return res.status(400).json({ message: 'Type, senderId, receiverId va message majburiy!' });
+      if (!type || !senderId || !receiverId) {
+        return res.status(400).json({ message: 'Type, senderId, receiverId majburiy!' });
       }
-
       if (senderId.toString() === receiverId.toString()) {
         return res.status(400).json({ message: "O'zingizga xabar yuborib bo'lmaydi!" });
       }
@@ -21,16 +21,33 @@ const notificationCtrl = {
         postId: postId || null,
         commentId: commentId || null,
       });
-
       if (existingNotification) {
         return res.status(200).json({ message: 'Bu notification allaqachon mavjud', notification: existingNotification });
       }
 
       const sender = await User.findById(senderId);
       const receiver = await User.findById(receiverId);
-
       if (!sender || !receiver) {
         return res.status(404).json({ message: 'Sender yoki receiver topilmadi!' });
+      }
+
+      let postContent = '';
+      if (postId) {
+        const post = await Post.findById(postId);
+        postContent = post ? post.content : '';
+      }
+
+      let notifMessage = message;
+      if (!notifMessage) {
+        if (type === 'comment') {
+          notifMessage = `${sender.username || sender.name || 'User'} sizning postingizga komment yozdi: "${postContent.substring(0, 20)}..."`;
+        } else if (type === 'like') {
+          notifMessage = `${sender.username || sender.name || 'User'} sizning postingizga like bosdi: "${postContent.substring(0, 20)}..."`;
+        } else if (type === 'follow') {
+          notifMessage = `${sender.username || sender.name || 'User'} sizni kuzatishni boshladi`;
+        } else {
+          notifMessage = `Yangi xabar: ${type}`;
+        }
       }
 
       if (type === 'follow') {
@@ -49,10 +66,9 @@ const notificationCtrl = {
         receiverId,
         postId: postId || null,
         commentId: commentId || null,
-        message,
+        message: notifMessage,
         isRead: false,
       });
-
       await newNotification.save();
 
       const populatedNotification = await Notification.findById(newNotification._id)
@@ -62,10 +78,7 @@ const notificationCtrl = {
 
       const receiverSocketId = global.onlineUsers.get(receiverId.toString());
       if (receiverSocketId) {
-        global._io.to(receiverSocketId).emit('newNotification', {
-          ...populatedNotification._doc,
-          createdAt: new Date(),
-        });
+        global._io.to(receiverSocketId).emit('newNotification', populatedNotification);
       }
 
       res.status(201).json(populatedNotification);
@@ -81,7 +94,6 @@ const notificationCtrl = {
       if (!userId) {
         return res.status(400).json({ message: 'User ID majburiy!' });
       }
-
       const notifications = await Notification.find({ receiverId: userId })
         .populate('senderId', 'username profileImage')
         .populate('postId', 'content postImage')
@@ -103,20 +115,16 @@ const notificationCtrl = {
         { isRead: true },
         { new: true }
       );
-
       if (!notification) {
         return res.status(404).json({ message: 'Notification topilmadi!' });
       }
-
       const receiverSocketId = global.onlineUsers.get(notification.receiverId.toString());
       if (receiverSocketId) {
         global._io.to(receiverSocketId).emit('notificationUpdated', {
           notificationId: notification._id,
           isRead: true,
         });
-        console.log('Notification updated event emitted to:', receiverSocketId);
       }
-
       res.status(200).json(notification);
     } catch (err) {
       console.error('Read Notification Error:', err);
@@ -128,11 +136,9 @@ const notificationCtrl = {
     try {
       const notificationId = req.params.id;
       const notification = await Notification.findByIdAndDelete(notificationId);
-
       if (!notification) {
         return res.status(404).json({ message: 'Notification topilmadi!' });
       }
-
       res.status(200).json({ message: 'Notification o‘chirildi!' });
     } catch (err) {
       console.error('Delete Notification Error:', err);

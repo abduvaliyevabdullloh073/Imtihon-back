@@ -8,4 +8,4 @@ router.get('/:postId', commentCtrl.getCommentsByPost);
 router.put('/:id', auth, commentCtrl.updateComment);
 router.delete('/:id', auth, commentCtrl.deleteComment);
 
-module.exports = router;
+module.exports = router; 

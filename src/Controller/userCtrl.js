@@ -1,10 +1,11 @@
 const bcrypt = require('bcrypt');
 const mongoose = require('mongoose');
-const User = require('../Model/userModel');
+const User = require('../Model/UserModel');
 const Post = require('../Model/postModel');
 const Comment = require('../Model/commentsModel');
 const Notification = require('../Model/notificatoinModel');
 const cloudinary = require('cloudinary').v2;
+const fs = require('fs');
 
 cloudinary.config({
   cloud_name: process.env.CLOUD_NAME,
@@ -23,66 +24,26 @@ const userCtrl = {
       if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
 
       const posts = await Post.find({ userId });
-      for (let post of posts) {
+      await Promise.all(posts.map(async post => {
         if (post.postImage && post.postImage.filename) {
-          await cloudinary.uploader.destroy(post.postImage.filename).catch(err => {
-            console.error('Cloudinary destroy error for post image:', err);
-          });
+          await cloudinary.uploader.destroy(post.postImage.filename).catch(() => { });
         }
-        await Comment.deleteMany({ postId: post._id }).catch(err => {
-          console.error('Comment delete error:', err);
-        });
-        await Post.findByIdAndDelete(post._id).catch(err => {
-          console.error('Post delete error:', err);
-        });
+        await Comment.deleteMany({ postId: post._id });
+        await Post.findByIdAndDelete(post._id);
+      }));
+
+      await Promise.all([
+        Comment.deleteMany({ userId }),
+        Post.updateMany({ likes: userId }, { $pull: { likes: userId } }),
+        User.updateMany({ followers: userId }, { $pull: { followers: userId } }),
+        User.updateMany({ following: userId }, { $pull: { following: userId } }),
+        Notification.deleteMany({ $or: [{ senderId: userId }, { receiverId: userId }] })
+      ]);
+
+      if (user.profileImage && user.profileImage.public_id) {
+        await cloudinary.uploader.destroy(user.profileImage.public_id).catch(() => { });
       }
-
-      await Comment.deleteMany({ userId }).catch(err => {
-        console.error('User comments delete error:', err);
-      });
-
-      await Post.updateMany(
-        { likes: userId },
-        { $pull: { likes: userId } }
-      ).catch(err => {
-        console.error('Update posts likes error:', err);
-      });
-
-      await User.updateMany(
-        { followers: userId },
-        { $pull: { followers: userId } }
-      ).catch(err => {
-        console.error('Update followers error:', err);
-      });
-
-      await User.updateMany(
-        { following: userId },
-        { $pull: { following: userId } }
-      ).catch(err => {
-        console.error('Update following error:', err);
-      });
-
-      await Notification.deleteMany({
-        $or: [
-          { senderId: userId },
-          { receiverId: userId },
-        ],
-      }).catch(err => {
-        console.error('Notification delete error:', err);
-      });
-
-      if (user.profileImage && user.profileImage.url && user.profileImage.url.includes('cloudinary')) {
-        const parts = user.profileImage.url.split('/');
-        const last = parts[parts.length - 1];
-        const publicId = last.split('.')[0];
-        await cloudinary.uploader.destroy(publicId).catch(err => {
-          console.error('Cloudinary destroy error for profile image:', err);
-        });
-      }
-
-      await User.findByIdAndDelete(userId).catch(err => {
-        console.error('User delete error:', err);
-      });
+      await User.findByIdAndDelete(userId);
 
       res.status(200).json({ message: 'Foydalanuvchi va unga tegishli barcha maʼlumotlar o‘chirildi' });
     } catch (error) {
@@ -97,49 +58,65 @@ const userCtrl = {
       if (req.user.role !== 101 && req.user._id.toString() !== userId) {
         return res.status(403).json({ message: "Sizda bu foydalanuvchini yangilash huquqi yo‘q" });
       }
-      const user = await User.findById(userId);
+      const user = await User.findById(userId).select('+password');
       if (!user) return res.status(404).json({ message: 'Foydalanuvchi topilmadi' });
-  
-      // Parolni yangilash
-      let newPassword = user.password;
-      if (req.body.password) {
-        if (req.body.password.length < 4) {
-          return res.status(400).json({ message: "Parol kamida 4 ta belgidan iborat bo‘lishi kerak" });
+
+      const [emailExists, usernameExists] = await Promise.all([
+        req.body.email && req.body.email !== user.email
+          ? User.findOne({ email: req.body.email })
+          : null,
+        req.body.username && req.body.username !== user.username
+          ? User.findOne({ username: req.body.username })
+          : null
+      ]);
+      if (emailExists) return res.status(400).json({ message: 'Bu email allaqachon band' });
+      if (usernameExists) return res.status(400).json({ message: 'Bu username allaqachon band' });
+
+      if (req.body.email) user.email = req.body.email;
+      if (req.body.username) user.username = req.body.username;
+      if (req.body.surname) user.surname = req.body.surname;
+      if (req.body.job !== undefined) user.job = req.body.job;
+      if (req.body.hobby !== undefined) user.hobby = req.body.hobby;
+
+      if (req.files && req.files.profileImage) {
+        if (user.profileImage && user.profileImage.public_id) {
+          await cloudinary.uploader.destroy(user.profileImage.public_id).catch(() => { });
         }
-        newPassword = await bcrypt.hash(req.body.password, 10);
+        const file = req.files.profileImage;
+        const result = await cloudinary.uploader.upload(file.tempFilePath, {
+          folder: 'profiles',
+          resource_type: 'auto',
+        });
+        await fs.promises.unlink(file.tempFilePath);
+        user.profileImage = { url: result.secure_url, public_id: result.public_id };
       }
-  
-      // ProfileImage yangilash
-      let newProfileImage = user.profileImage;
-      if (req.body.profileImage && req.body.profileImage.url) {
-        // eski Cloudinary rasm bo‘lsa, o‘chirish (ixtiyoriy)
-        if (user.profileImage?.url && user.profileImage.url.includes('cloudinary')) {
-          try {
-            const parts = user.profileImage.url.split('/');
-            const last = parts[parts.length - 1];
-            const publicId = last.split('.')[0];
-            await cloudinary.uploader.destroy(publicId);
-          } catch (e) { }
+
+      if (req.body.newPassword) {
+        if (!req.body.currentPassword) {
+          return res.status(400).json({ message: 'Joriy parolni kiriting' });
         }
-        newProfileImage = req.body.profileImage;
+        const isMatch = await bcrypt.compare(req.body.currentPassword, user.password);
+        if (!isMatch) {
+          return res.status(400).json({ message: 'Joriy parol notoʻgʻri' });
+        }
+        if (req.body.newPassword.length < 4) {
+          return res.status(400).json({ message: "Yangi parol kamida 4 ta belgidan iborat bo‘lishi kerak" });
+        }
+        user.password = req.body.newPassword;
       }
-  
-      const updatedFields = {
-        username: req.body.username || user.username,
-        password: newPassword,
-        profileImage: newProfileImage,
-        job: req.body.job !== undefined ? req.body.job : user.job,
-        hobby: req.body.hobby !== undefined ? req.body.hobby : user.hobby,
-      };
-  
-      const updatedUser = await User.findByIdAndUpdate(userId, updatedFields, { new: true }).select('-password');
-      res.status(200).json({ message: 'Foydalanuvchi muvaffaqiyatli yangilandi', user: updatedUser });
+
+      await user.save();
+      const userToReturn = user.toObject();
+      delete userToReturn.password;
+      res.status(200).json({ message: 'Foydalanuvchi muvaffaqiyatli yangilandi', user: userToReturn });
     } catch (error) {
-      console.error('Update User Error:', error.stack);
+      if (error.code === 11000) {
+        return res.status(400).json({ message: "Username yoki email band" });
+      }
       res.status(500).json({ message: 'Serverda xatolik: ' + error.message });
     }
   },
-  
+
   searchOrGetUsers: async (req, res) => {
     try {
       const q = req.query.q || '';
@@ -279,7 +256,59 @@ const userCtrl = {
       console.error('Profil olishda xato:', error.stack);
       res.status(500).json({ message: 'Serverda xato yuz berdi: ' + error.message });
     }
-  }
+  },
+
+   getLikedPosts: async (req, res) => {
+    try {
+      const posts = await Post.find({ likes: req.params.id })
+        .populate('userId', 'username profileImage')
+        .lean();
+
+      res.json(posts.map(post => ({
+        ...post,
+        _action: 'like',
+      })));
+    } catch (e) {
+      res.status(500).json({ message: "Layk bosilgan postlarni olishda xatolik" });
+    }
+  },
+
+  getCommentedPosts: async (req, res) => {
+    try {
+      const comments = await Comment.find({ userId: req.params.id })
+        .populate('postId')
+        .lean();
+
+      const postIds = comments.map(c => c.postId?._id).filter(Boolean);
+      const posts = await Post.find({ _id: { $in: postIds } }).lean();
+
+      const result = comments.map(c => ({
+        comment: c,
+        post: posts.find(p => p._id.toString() === c.postId?._id?.toString()),
+        _action: 'comment'
+      }));
+
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ message: "Komment qoldirilgan postlarni olishda xatolik" });
+    }
+  },
+
+  getMyPosts: async (req, res) => {
+    try {
+      const posts = await Post.find({ userId: req.params.id })
+        .populate('userId', 'username profileImage')
+        .lean();
+
+      res.json(posts.map(post => ({
+        ...post,
+        _action: 'post'
+      })));
+    } catch (e) {
+      res.status(500).json({ message: "User postlarini olishda xatolik" });
+    }
+  },
+
 };
 
 module.exports = userCtrl;
