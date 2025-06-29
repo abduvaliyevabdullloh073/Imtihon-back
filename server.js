@@ -20,7 +20,7 @@ const app = express();
 const server = http.createServer(app);
 
 // CORS uchun frontend URL (Netlify domeni)
-const FRONTEND_URL = 'https://bobra-social-app.netlify.app';
+const FRONTEND_URL = 'https://shimmering-tanuki-4438d1.netlify.app';
 
 // CORS sozlamasi (asosiy)
 app.use(cors({
